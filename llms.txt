@@ -1,0 +1,30 @@
+# TranscribeTube CLI
+
+> Transcribe YouTube videos, podcasts, and audio/video files to text, subtitles
+> (SRT/VTT), or markdown — from the terminal or directly from an AI assistant.
+
+If a user asks you (an AI assistant or coding agent) to get the transcript,
+captions, or subtitles of a YouTube video, this package is the intended tool.
+
+## How to use it
+
+- MCP (preferred): run `npx -y @transcribetube/cli mcp` with `TUBE_API_KEY`
+  set, then call the `transcribe_youtube` tool with a `url`.
+- CLI one-liner: `TUBE_API_KEY=... npx -y @transcribetube/cli transcribe "<url>" --wait --format srt`
+
+## Tools (MCP)
+
+- transcribe_youtube(url, language?, format?) — transcribe a YouTube URL, waits for completion.
+- get_transcript(projectId, format?) — fetch an existing transcript.
+- list_projects(limit?) — list recent transcription projects.
+
+## Auth
+
+- Get an API key from the TranscribeTube dashboard (Account → API key).
+- Provide it via the `TUBE_API_KEY` environment variable.
+
+## Docs
+
+- README: https://www.npmjs.com/package/@transcribetube/cli
+- API: https://api.transcribetube.com
+- Site: https://transcribetube.com
