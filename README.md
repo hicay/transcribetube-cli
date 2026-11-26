@@ -33,12 +33,10 @@ To install somewhere else, or a specific version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_INSTALL_DIR=/usr/local/bin sudo -E sh
-curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_VERSION=0.1.1 sh
 ```
 
 ### npm (macOS, Linux, Windows)
-
-> Available once the first version is published to npm.
 
 ```bash
 npm install -g @transcribetube/cli
@@ -63,19 +61,19 @@ it, and put `tube` and `transcribetube-mcp` on your `PATH`:
 
 ```bash
 # Apple silicon Mac; use x86_64-apple-darwin for an Intel Mac
-curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.0/tube-v0.1.0-aarch64-apple-darwin.tar.gz
-tar -xzf tube-v0.1.0-aarch64-apple-darwin.tar.gz
-sudo mv tube-v0.1.0-aarch64-apple-darwin/tube tube-v0.1.0-aarch64-apple-darwin/transcribetube-mcp /usr/local/bin/
+curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.1/tube-v0.1.1-aarch64-apple-darwin.tar.gz
+tar -xzf tube-v0.1.1-aarch64-apple-darwin.tar.gz
+sudo mv tube-v0.1.1-aarch64-apple-darwin/tube tube-v0.1.1-aarch64-apple-darwin/transcribetube-mcp /usr/local/bin/
 ```
 
 ```bash
 # x86-64 Linux; use aarch64-unknown-linux-musl on ARM
-curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.0/tube-v0.1.0-x86_64-unknown-linux-musl.tar.gz
-tar -xzf tube-v0.1.0-x86_64-unknown-linux-musl.tar.gz
-sudo mv tube-v0.1.0-x86_64-unknown-linux-musl/tube tube-v0.1.0-x86_64-unknown-linux-musl/transcribetube-mcp /usr/local/bin/
+curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.1/tube-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+tar -xzf tube-v0.1.1-x86_64-unknown-linux-musl.tar.gz
+sudo mv tube-v0.1.1-x86_64-unknown-linux-musl/tube tube-v0.1.1-x86_64-unknown-linux-musl/transcribetube-mcp /usr/local/bin/
 ```
 
-On Windows, download `tube-v0.1.0-x86_64-pc-windows-msvc.zip`, unpack it, and
+On Windows, download `tube-v0.1.1-x86_64-pc-windows-msvc.zip`, unpack it, and
 add the folder to your `Path`.
 
 ### From source
@@ -109,7 +107,8 @@ TUBE_API_KEY=<key> tube transcribe "<url>" --wait
 
 **Use from Claude or any MCP client.** Add to `claude_desktop_config.json`
 (if the client cannot find the command, give the full path, for example
-`/Users/you/.local/bin/transcribetube-mcp`):
+`/Users/you/.local/bin/transcribetube-mcp`; with nothing installed, use
+`"command": "npx"` and `"args": ["-y", "@transcribetube/cli", "mcp"]`):
 
 ```json
 {

@@ -1,6 +1,6 @@
 {
   "name": "@transcribetube/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Transcribe YouTube videos to text, SRT, VTT, or markdown from your terminal or from AI assistants via MCP.",
   "keywords": [
     "youtube",
@@ -29,6 +29,7 @@
   },
   "bin": {
     "tube": "bin/tube.js",
+    "cli": "bin/tube.js",
     "transcribetube-mcp": "bin/transcribetube-mcp.js"
   },
   "files": [
