@@ -58,6 +58,106 @@ claude mcp add transcribetube --env TUBE_API_KEY=<key> -- transcribetube-mcp
 Tools exposed: `transcribe_youtube`, `get_transcript`, `list_projects`.
 See [`AI_INTEGRATION.md`](./AI_INTEGRATION.md) for how discovery works.
 
+## How to use it
+
+### 1. Sign in once
+
+```bash
+tube login
+```
+
+This opens the API access page of the dashboard. Copy the key, paste it at the
+prompt, and the CLI checks it against the API before storing it. To check
+later that it still works:
+
+```bash
+tube whoami
+# API key works (97 projects)
+```
+
+### 2. Transcribe a video and wait for the text
+
+```bash
+tube transcribe "https://www.youtube.com/watch?v=zhWDdy_5v2w" --wait
+```
+
+```text
+state: upload
+state: transcription
+state: done
+[00:00:00] Speaker 0: In a single minute your body produces 120 to 180 million red blood cells, ...
+[00:00:34] Speaker 0: An average of 1.38 micrometers of rain fall around the world, ...
+```
+
+The `state:` lines go to stderr, so redirecting stdout gives a clean file. A
+watch URL, a `youtu.be` link, a Shorts link or the bare 11-character id all
+work. Transcribing uses your minutes: one per started minute of video.
+
+### 3. Save subtitles or another format
+
+```bash
+tube transcribe "<url>" --wait --format srt > video.srt
+tube transcribe "<url>" --wait --format vtt > video.vtt
+tube transcribe "<url>" --wait --format md  > video.md
+```
+
+### 4. Start now, fetch later
+
+Without `--wait` the command prints only the project id and returns at once:
+
+```bash
+id=$(tube transcribe "<url>")
+tube project watch "$id"                 # waits until it is done
+tube transcript "$id" --format srt > video.srt
+```
+
+`tube transcript` works for any finished project, including ones made in the
+web app (uploads, recordings), not only YouTube ones:
+
+```bash
+tube project list --limit 5
+tube transcript <id> --no-speakers --no-timecodes > plain.txt
+```
+
+### 5. Use it in scripts
+
+```bash
+# Every video in a list, one .srt each; stop on the first real failure.
+while read -r url; do
+  id=$(tube transcribe "$url") || exit $?
+  tube project watch "$id" && tube transcript "$id" -f srt > "$id.srt"
+done < urls.txt
+```
+
+```bash
+# JSON for other tools (no progress output in --json mode)
+tube project list --json | jq -r '.[] | select(.state == "done") | .id'
+tube transcript <id> --format json | jq '.transcription[0]'
+```
+
+In CI, skip `tube login` and set `TUBE_API_KEY` as a secret instead. The exit
+code tells a script what went wrong (see below). To be called back when a
+transcription finishes, pass `--webhook https://your.server/hook`.
+
+### 6. Let an AI assistant do it
+
+Add the MCP server (config under *Quick start*), then ask in plain words:
+
+> Get me the transcript of https://youtu.be/zhWDdy_5v2w and summarise it.
+
+The assistant calls `transcribe_youtube`, waits for the result, and works
+with the text. `get_transcript` and `list_projects` let it reuse transcripts
+you already have instead of spending minutes again.
+
+### Good to know
+
+- A video without speech finishes with an empty transcript; the CLI says so
+  on stderr.
+- `--wait` gives up after 15 minutes. The transcription keeps running; pick
+  it up with `tube project watch <id>`.
+- `--lang` is accepted, but the API currently detects the language itself.
+- `tube logout` removes the stored key.
+
 ## Commands
 
 | Command | Description |
