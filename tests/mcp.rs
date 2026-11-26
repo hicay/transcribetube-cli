@@ -94,6 +94,9 @@ fn route(req: &Request) -> (u16, String) {
         ])),
         ("GET", "/api/detail/p1") => ok(done_project("p1")),
         ("GET", "/api/detail/p2") => ok(in_progress("p2", "upload")),
+        ("GET", "/api/detail/silent") => {
+            ok(json!({"id": "silent", "name": "TEST VIDEO", "text": ""}))
+        }
         ("POST", "/api/transcribeVideo") => ok(json!({"success": true, "projectId": "p1"})),
         _ => error(404, "[404] Project not found"),
     }
@@ -290,4 +293,17 @@ fn tube_mcp_is_the_same_server() {
     let res = s.tool(2, "list_projects", json!({}));
     assert!(text_of(&res).contains("\"p1\""));
     assert_eq!(api.requests()[0].header("x-tt-source"), Some("mcp"));
+}
+
+#[test]
+fn a_video_without_speech_is_explained_not_returned_empty() {
+    let api = MockApi::start(route);
+    let mut s = Server::mcp(&api);
+    let res = s.tool(
+        1,
+        "get_transcript",
+        json!({"projectId": "silent", "format": "srt"}),
+    );
+    assert!(res["result"].get("isError").is_none());
+    assert!(text_of(&res).contains("no speech was detected"));
 }

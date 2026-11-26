@@ -136,6 +136,15 @@ fn parse_call(params: &Value) -> Result<Call, String> {
     }
 }
 
+/// An empty tool result reads as a failure to a model; say what happened.
+fn rendered(project: &Value, format: Format) -> String {
+    let text = project.get("text").and_then(Value::as_str).unwrap_or("");
+    if text.trim().is_empty() {
+        return "The transcript is empty: no speech was detected in this video.".to_string();
+    }
+    format_project(project, format, FormatOptions::default())
+}
+
 fn execute(client: &Client, call: Call) -> Result<String, String> {
     let text = |e: crate::api::ApiError| e.message;
     match call {
@@ -154,12 +163,12 @@ fn execute(client: &Client, call: Call) -> Result<String, String> {
                 },
             )
             .map_err(text)?;
-            Ok(format_project(&project, format, FormatOptions::default()))
+            Ok(rendered(&project, format))
         }
         Call::GetTranscript { project_id, format } => {
             let project = client.get_project(&project_id).map_err(text)?;
             match crate::api::project_state(&project).as_str() {
-                "done" => Ok(format_project(&project, format, FormatOptions::default())),
+                "done" => Ok(rendered(&project, format)),
                 "error" => Err(project
                     .get("errorMessage")
                     .and_then(Value::as_str)

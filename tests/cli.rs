@@ -67,6 +67,9 @@ fn route(req: &Request) -> (u16, String) {
         ("GET", "/api/detail/p1") => ok(done_project("p1")),
         ("GET", "/api/detail/p2") => ok(in_progress("p2", "upload")),
         ("GET", "/api/detail/p3") => ok(failed_project("p3")),
+        ("GET", "/api/detail/silent") => ok(
+            json!({"id": "silent", "name": "TEST VIDEO", "youtubeId": "C0DPdy98e4c", "language": "en", "text": ""}),
+        ),
         ("GET", p) if p.starts_with("/api/detail/") => error(404, "[404] Project not found"),
         ("POST", "/api/transcribeVideo") => ok(json!({"success": true, "projectId": "p1"})),
         ("GET", "/account/me") if req.header("authorization") == Some("Bearer jwt") => {
@@ -508,4 +511,12 @@ fn waiting_shows_each_state_once() {
         .requests()
         .iter()
         .any(|q| q.path.starts_with("/api/detail/p9")));
+}
+
+#[test]
+fn a_video_without_speech_says_so_instead_of_printing_nothing() {
+    let api = MockApi::start(route);
+    let r = run(&api, &KEY, &["transcript", "silent", "-f", "srt"]);
+    assert_eq!((r.code, r.stdout.as_str()), (0, "\n"));
+    assert!(r.stderr.contains("the transcript is empty"), "{}", r.stderr);
 }

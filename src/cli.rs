@@ -196,6 +196,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             if cli.json {
                 print_json(&project);
             } else {
+                note_if_empty(&project);
                 out(&format_project(&project, *format, FormatOptions::default()));
             }
             Ok(())
@@ -260,6 +261,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     "The project is done but has no transcript text.",
                 ));
             }
+            note_if_empty(&project);
             out(&format_project(
                 &project,
                 *format,
@@ -274,6 +276,18 @@ fn dispatch(cli: &Cli) -> Result<()> {
             crate::mcp::run_stdio(client_for(cli, "mcp"));
             Ok(())
         }
+    }
+}
+
+/// A video without speech finishes with an empty transcript; say so, since
+/// empty output with exit code 0 otherwise looks like a bug.
+fn note_if_empty(project: &Value) {
+    let text = project.get("text").and_then(Value::as_str).unwrap_or("");
+    if text.trim().is_empty() {
+        info(
+            "note: the transcript is empty (no speech was detected).",
+            false,
+        );
     }
 }
 
