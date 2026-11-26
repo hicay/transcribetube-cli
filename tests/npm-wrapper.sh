@@ -35,6 +35,10 @@ TUBE_BINARY_BASE_URL="http://127.0.0.1:$port" npm install --prefix "$work/a" "$t
 got="$("$work/a/node_modules/.bin/tube" --version)"
 [ "$got" = "tube $version" ] || { echo "unexpected: $got" >&2; exit 1; }
 
+echo "== npx finds a command: it runs the bin named after the package (cli)"
+got="$("$work/a/node_modules/.bin/cli" --version)"
+[ "$got" = "tube $version" ] || { echo "unexpected: $got" >&2; exit 1; }
+
 echo "== exit codes and stdout pass through the launcher"
 set +e
 out="$(XDG_CONFIG_HOME="$work/empty" "$work/a/node_modules/.bin/tube" whoami 2>/dev/null)"
