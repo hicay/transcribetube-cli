@@ -5,8 +5,10 @@
 #   set `version` in Cargo.toml (npm/package.json follows the tag), commit
 #   git tag vX.Y.Z && git push origin main --tags
 #
-# npm needs the `NPM_TOKEN` repository secret (an npm Automation token for the
-# @transcribetube scope). Without it the npm step is skipped.
+# npm: the workflow is a trusted publisher of @transcribetube/cli (set on
+# npmjs.com: package settings, Trusted Publisher, GitHub Actions, this repo,
+# release.yml). It can only stage a version; a maintainer then approves it on
+# npmjs.com with their second factor. No npm token is stored in this repo.
 
 name: Release
 
@@ -105,23 +107,20 @@ jobs:
         runs-on: ubuntu-24.04
         permissions:
             contents: read
-            id-token: write # npm provenance
+            id-token: write # trusted publishing (OIDC): no npm token is stored anywhere
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
               with:
-                  node-version: '22'
+                  node-version: '24'
                   registry-url: 'https://registry.npmjs.org'
-            - name: Publish to npm
+            # Staged publishing needs npm 11.15 or newer.
+            - run: npm install -g npm@latest
+            - name: Stage the npm package
               env:
-                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
                   GH_TOKEN: ${{ github.token }}
                   GH_REPO: ${{ github.repository }}
               run: |
-                  if [ -z "$NODE_AUTH_TOKEN" ]; then
-                    echo "::warning::NPM_TOKEN is not set; skipping the npm publish."
-                    exit 0
-                  fi
                   TAG="${GITHUB_REF#refs/tags/}"
                   cd npm
                   npm version "${TAG#v}" --no-git-tag-version --allow-same-version
@@ -138,4 +137,6 @@ jobs:
                   '
                   rm SHA256SUMS
                   cp ../README.md README.md
-                  npm publish --provenance
+                  # The version is staged, not live: a maintainer approves it on
+                  # npmjs.com (Staged Packages) or with `npm stage approve <id>`.
+                  npm stage publish --access public
