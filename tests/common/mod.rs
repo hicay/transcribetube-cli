@@ -1,8 +1,11 @@
-//! A tiny HTTP server that stands in for the TranscribeTube API in tests.
+//! A tiny HTTP server that stands in for the TranscribeTube API in tests,
+//! and for the storage that file uploads are PUT to.
 #![allow(dead_code)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -16,6 +19,8 @@ pub struct Request {
     /// Header names are lower-cased.
     pub headers: Vec<(String, String)>,
     pub body: String,
+    /// The body as received; `body` is lossy for binary uploads.
+    pub raw: Vec<u8>,
 }
 
 impl Request {
@@ -85,6 +90,7 @@ impl MockApi {
                         path,
                         headers,
                         body: String::from_utf8_lossy(&body).into_owned(),
+                        raw: body,
                     };
                     let (status, payload) = handler(&request);
                     seen.lock().unwrap().push(request);
@@ -132,4 +138,62 @@ pub fn in_progress(id: &str, state: &str) -> Value {
 
 pub fn failed_project(id: &str) -> Value {
     json!({"id": id, "name": "Test Video", "state": "error", "errorMessage": "Download: video unavailable", "transcription": [], "speakers": []})
+}
+
+/// The key `/api/upload-url` hands out is this plus the file name it was given.
+pub const UPLOAD_PREFIX: &str = "raw/usr/u1/0b7e1f6e-5d43-4c0a-9a57-3f2f8d1c9e11/";
+
+/// The file upload flow as the API serves it. The pre-signed URL points back
+/// at this mock (under `/s3/`), which then plays the storage side too.
+/// `None` for any other request, so a test's own routes can take over.
+pub fn upload_routes(req: &Request) -> Option<(u16, String)> {
+    match (req.method.as_str(), req.path.split('?').next().unwrap()) {
+        ("POST", "/api/upload-url") => {
+            let key = format!(
+                "{UPLOAD_PREFIX}{}",
+                req.json()["fileName"].as_str().unwrap_or("")
+            );
+            let host = req.header("host").expect("host header");
+            Some(ok(json!({
+                "url": format!("http://{host}/s3/{key}?X-Amz-Signature=abc&X-Amz-Expires=3600"),
+                "key": key,
+            })))
+        }
+        ("PUT", path) if path.starts_with("/s3/") => Some((200, String::new())),
+        ("POST", "/api/transcribeFile") => Some(ok(json!({"id": "p1"}))),
+        _ => None,
+    }
+}
+
+/// What S3 answers to a PUT whose signature it does not accept.
+pub fn s3_denied() -> (u16, String) {
+    (
+        403,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>".to_string(),
+    )
+}
+
+/// 200 kB that are not valid UTF-8, so a lossy or partial upload shows.
+pub fn media_bytes() -> Vec<u8> {
+    (0..200_000u32).map(|i| (i * 31 % 251) as u8).collect()
+}
+
+static NEXT_MEDIA_DIR: AtomicUsize = AtomicUsize::new(0);
+
+/// A fresh, empty directory under the system temp directory.
+pub fn temp_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "tube-media-{}-{}",
+        std::process::id(),
+        NEXT_MEDIA_DIR.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Writes `bytes` to a new file called `name` and returns its path.
+pub fn media_file(name: &str, bytes: &[u8]) -> PathBuf {
+    let path = temp_dir().join(name);
+    std::fs::write(&path, bytes).unwrap();
+    path
 }

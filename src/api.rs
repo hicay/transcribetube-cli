@@ -4,6 +4,7 @@
 //! `/api/*` accepts only the `api-key` header, `/account/*` accepts only a
 //! Bearer session token. The client sends whichever it has.
 use std::fmt;
+use std::io::Read;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -52,9 +53,24 @@ pub const NO_TRANSCRIPT: &str =
 
 pub type Result<T> = std::result::Result<T, ApiError>;
 
+/// Where `POST /api/upload-url` says to PUT a file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UploadTarget {
+    /// Pre-signed S3 PUT URL, valid for one hour.
+    pub url: String,
+    /// The object key; `transcribe_file` registers the upload by it.
+    pub key: String,
+}
+
+/// Uploads land in this bucket; `/api/transcribeFile` wants its public URL.
+const UPLOAD_BUCKET_URL: &str = "https://videoven-data.s3.amazonaws.com";
+
 pub struct Client {
     cfg: Config,
     agent: ureq::Agent,
+    /// For the file upload: no overall deadline (a large file takes as long
+    /// as it takes), only one on each read and write.
+    uploader: ureq::Agent,
     /// Sent as `x-tt-source` so the backend can tell CLI from MCP usage.
     source: &'static str,
 }
@@ -66,7 +82,18 @@ impl Client {
             .timeout(Duration::from_secs(120))
             .user_agent(&format!("tube/{}", crate::VERSION))
             .build();
-        Client { cfg, agent, source }
+        let uploader = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(15))
+            .timeout_read(Duration::from_secs(120))
+            .timeout_write(Duration::from_secs(120))
+            .user_agent(&format!("tube/{}", crate::VERSION))
+            .build();
+        Client {
+            cfg,
+            agent,
+            uploader,
+            source,
+        }
     }
 
     pub fn has_api_key(&self) -> bool {
@@ -208,12 +235,90 @@ impl Client {
             body["language"] = json!(lang);
         }
         let res = self.request("POST", "/api/transcribeVideo", Some(&body))?;
-        res.get("projectId")
-            .or_else(|| res.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| ApiError::local(format!("The API did not return a project id: {res}")))
+        project_id(&res)
     }
+
+    /// Step 1 of a file transcription: asks where to upload the file.
+    /// `file_type` is the MIME type; the upload must send the same one.
+    pub fn create_upload_url(&self, file_name: &str, file_type: &str) -> Result<UploadTarget> {
+        let body = json!({"fileName": file_name, "fileType": file_type});
+        let res = self.request("POST", "/api/upload-url", Some(&body))?;
+        let field = |key: &str| {
+            res.get(key)
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        match (field("url"), field("key")) {
+            (Some(url), Some(key)) => Ok(UploadTarget { url, key }),
+            _ => Err(ApiError::local(format!(
+                "The API did not return an upload URL: {res}"
+            ))),
+        }
+    }
+
+    /// Step 2: streams `length` bytes from `body` to the pre-signed URL. The
+    /// URL carries its own signature, so no credential is sent with it.
+    pub fn upload(
+        &self,
+        url: &str,
+        content_type: &str,
+        body: impl Read,
+        length: u64,
+    ) -> Result<()> {
+        let sent = self
+            .uploader
+            .put(url)
+            .set("content-type", content_type)
+            .set("content-length", &length.to_string())
+            .send(body);
+        match sent {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(code, res)) => {
+                let text = res.into_string().unwrap_or_default();
+                // S3 answers in XML: <Error><Code>AccessDenied</Code>...
+                let reason = text
+                    .split_once("<Code>")
+                    .and_then(|(_, rest)| rest.split_once("</Code>"))
+                    .map(|(code, _)| format!(" ({code})"))
+                    .unwrap_or_default();
+                Err(ApiError::local(format!(
+                    "The upload was rejected with status {code}{reason}. Nothing was transcribed."
+                )))
+            }
+            // Not `{t}`: that would print the signed URL.
+            Err(ureq::Error::Transport(t)) => Err(ApiError::local(format!(
+                "The upload failed: {}. Nothing was transcribed.",
+                t.message()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| t.kind().to_string())
+            ))),
+        }
+    }
+
+    /// Step 3: registers the uploaded object as a project and returns its id.
+    /// `key` is the one `create_upload_url` returned.
+    pub fn transcribe_file(&self, name: &str, key: &str, language: Option<&str>) -> Result<String> {
+        let mut body = json!({
+            "name": name,
+            // The API splits this on "::" and reads the upload's id from the URL.
+            "fileUrl": format!("{UPLOAD_BUCKET_URL}/{key}::{key}"),
+        });
+        if let Some(lang) = language {
+            body["language"] = json!(lang);
+        }
+        let res = self.request("POST", "/api/transcribeFile", Some(&body))?;
+        project_id(&res)
+    }
+}
+
+/// `/api/transcribeVideo` answers `{ projectId }`, `/api/transcribeFile` `{ id }`.
+fn project_id(res: &Value) -> Result<String> {
+    res.get("projectId")
+        .or_else(|| res.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| ApiError::local(format!("The API did not return a project id: {res}")))
 }
 
 /// `upload` | `transcription` | `done` | `error`, lower-cased. A finished

@@ -8,7 +8,7 @@ use common::*;
 use serde_json::json;
 use transcribetube_cli::api::Client;
 use transcribetube_cli::config::Config;
-use transcribetube_cli::transcribe::{start_youtube, wait_for_project, WaitOptions};
+use transcribetube_cli::transcribe::{start_file, start_youtube, wait_for_project, WaitOptions};
 
 fn client(api: &MockApi, api_key: Option<&str>, token: Option<&str>) -> Client {
     Client::new(
@@ -292,4 +292,221 @@ fn an_api_error_during_the_wait_is_passed_on() {
     let api = MockApi::start(|_| error(404, "[404] Project not found"));
     let err = wait_for_project(&client(&api, Some("k"), None), "gone", fast()).unwrap_err();
     assert_eq!(err.status, Some(404));
+}
+
+/// The upload flow, with one route swapped out.
+fn upload_api_with(
+    method: &'static str,
+    prefix: &'static str,
+    response: fn() -> (u16, String),
+) -> MockApi {
+    MockApi::start(move |req| {
+        if req.method == method && req.path.starts_with(prefix) {
+            return response();
+        }
+        upload_routes(req).unwrap_or_else(|| error(404, "no such route"))
+    })
+}
+
+fn upload_api() -> MockApi {
+    MockApi::start(|req| upload_routes(req).unwrap_or_else(|| error(404, "no such route")))
+}
+
+#[test]
+fn a_file_is_transcribed_in_three_requests_with_the_fields_the_api_requires() {
+    let api = upload_api();
+    let bytes = media_bytes();
+    let file = media_file("Board meeting #3.m4a", &bytes);
+    let mut announced = Vec::new();
+    let mut record = |size: u64| announced.push(size);
+
+    let id = start_file(
+        &client(&api, Some("test-key"), None),
+        file.to_str().unwrap(),
+        None,
+        Some(&mut record),
+    )
+    .unwrap();
+    assert_eq!(id, "p1");
+    assert_eq!(announced, [bytes.len() as u64]);
+
+    let seen = api.requests();
+    assert_eq!(seen.len(), 3);
+    let key = format!("{UPLOAD_PREFIX}Board_meeting__3.m4a");
+
+    // 1. Ask where to upload. The name becomes part of the storage key, so
+    //    only plain characters are sent.
+    assert_eq!(
+        (seen[0].method.as_str(), seen[0].path.as_str()),
+        ("POST", "/api/upload-url")
+    );
+    assert_eq!(seen[0].header("api-key"), Some("test-key"));
+    assert_eq!(
+        seen[0].json(),
+        json!({"fileName": "Board_meeting__3.m4a", "fileType": "audio/mp4"})
+    );
+
+    // 2. PUT the bytes to the signed URL, exactly as given, with the same
+    //    content type and without our credentials.
+    assert_eq!(seen[1].method, "PUT");
+    assert_eq!(
+        seen[1].path,
+        format!("/s3/{key}?X-Amz-Signature=abc&X-Amz-Expires=3600")
+    );
+    assert_eq!(seen[1].header("content-type"), Some("audio/mp4"));
+    assert_eq!(seen[1].header("content-length"), Some("200000"));
+    assert_eq!(seen[1].header("transfer-encoding"), None);
+    assert_eq!(seen[1].header("api-key"), None);
+    assert_eq!(seen[1].header("authorization"), None);
+    assert!(
+        seen[1].raw == bytes,
+        "the upload must be byte for byte the file"
+    );
+
+    // 3. Register the upload. The project keeps the real file name.
+    assert_eq!(
+        (seen[2].method.as_str(), seen[2].path.as_str()),
+        ("POST", "/api/transcribeFile")
+    );
+    assert_eq!(seen[2].header("api-key"), Some("test-key"));
+    assert_eq!(seen[2].header("x-tt-source"), Some("cli"));
+    assert_eq!(
+        seen[2].json(),
+        json!({
+            "name": "Board meeting #3.m4a",
+            "fileUrl": format!("https://videoven-data.s3.amazonaws.com/{key}::{key}"),
+        })
+    );
+}
+
+#[test]
+fn a_file_transcription_passes_the_language_through() {
+    let api = upload_api();
+    let file = media_file("talk.mp3", b"ID3 not really audio");
+    let c = client(&api, Some("k"), None);
+    start_file(&c, file.to_str().unwrap(), Some("nl"), None).unwrap();
+    start_file(&c, file.to_str().unwrap(), Some("auto"), None).unwrap();
+    let posts: Vec<_> = api
+        .requests()
+        .into_iter()
+        .filter(|q| q.path == "/api/transcribeFile")
+        .collect();
+    assert_eq!(posts[0].json()["language"], "nl");
+    assert!(posts[1].json().get("language").is_none());
+}
+
+#[test]
+fn a_missing_file_a_directory_and_an_empty_file_never_reach_the_api() {
+    let api = upload_api();
+    let c = client(&api, Some("k"), None);
+    let dir = temp_dir();
+
+    let missing = dir.join("nope.mp3");
+    let err = start_file(&c, missing.to_str().unwrap(), None, None).unwrap_err();
+    assert!(err.message.starts_with("No such file"), "{}", err.message);
+    assert_eq!(err.status, None);
+
+    let err = start_file(&c, dir.to_str().unwrap(), None, None).unwrap_err();
+    assert!(err.message.contains("is a directory"), "{}", err.message);
+
+    let empty = media_file("empty.wav", b"");
+    let err = start_file(&c, empty.to_str().unwrap(), None, None).unwrap_err();
+    assert!(err.message.contains("empty file"), "{}", err.message);
+
+    assert!(api.requests().is_empty());
+}
+
+#[test]
+fn a_rejected_upload_stops_before_a_project_is_created() {
+    let api = upload_api_with("PUT", "/s3/", s3_denied);
+    let file = media_file("talk.mp3", &media_bytes());
+    let err = start_file(
+        &client(&api, Some("k"), None),
+        file.to_str().unwrap(),
+        None,
+        None,
+    )
+    .unwrap_err();
+    // Not an API status: a 403 from storage is not a bad API key.
+    assert_eq!(err.status, None);
+    assert_eq!(
+        err.message,
+        "The upload was rejected with status 403 (AccessDenied). Nothing was transcribed."
+    );
+    let seen = api.requests();
+    assert_eq!(seen.len(), 2);
+    assert!(seen.iter().all(|q| q.path != "/api/transcribeFile"));
+}
+
+#[test]
+fn an_upload_that_cannot_connect_does_not_print_the_signed_url() {
+    let api = MockApi::start(|req| match req.path.as_str() {
+        "/api/upload-url" => ok(json!({
+            "url": "http://127.0.0.1:1/s3/k?X-Amz-Signature=secret-signature",
+            "key": "raw/usr/u1/x/talk.mp3",
+        })),
+        _ => error(404, "no such route"),
+    });
+    let file = media_file("talk.mp3", b"abc");
+    let err = start_file(
+        &client(&api, Some("k"), None),
+        file.to_str().unwrap(),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        err.message.starts_with("The upload failed"),
+        "{}",
+        err.message
+    );
+    assert!(!err.message.contains("secret-signature"), "{}", err.message);
+    assert_eq!(api.requests().len(), 1);
+}
+
+#[test]
+fn an_api_error_on_the_upload_url_is_passed_on_before_anything_is_uploaded() {
+    let api = upload_api_with("POST", "/api/upload-url", || (402, String::new()));
+    let file = media_file("talk.mp3", b"abc");
+    let err = start_file(
+        &client(&api, Some("k"), None),
+        file.to_str().unwrap(),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(err.status, Some(402));
+    assert_eq!(api.requests().len(), 1);
+}
+
+#[test]
+fn not_enough_credit_when_registering_the_upload_is_a_402() {
+    let api = upload_api_with("POST", "/api/transcribeFile", || {
+        error(402, "Not enough credit for user: u1.")
+    });
+    let file = media_file("talk.mp3", b"abc");
+    let err = start_file(
+        &client(&api, Some("k"), None),
+        file.to_str().unwrap(),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(err.status, Some(402));
+    assert_eq!(err.message, "Not enough credit for user: u1.");
+}
+
+#[test]
+fn an_upload_url_response_without_a_url_is_an_error() {
+    let api = upload_api_with("POST", "/api/upload-url", || ok(json!({"key": "k"})));
+    let file = media_file("talk.mp3", b"abc");
+    let err = start_file(
+        &client(&api, Some("k"), None),
+        file.to_str().unwrap(),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("did not return an upload URL"));
+    assert_eq!(api.requests().len(), 1);
 }

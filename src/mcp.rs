@@ -1,7 +1,7 @@
 //! Model Context Protocol server over stdio.
 //!
 //! MCP-capable assistants (Claude Desktop, Claude Code, Cursor, ...) call
-//! `transcribe_youtube` instead of guessing at scraping code. The stdio
+//! `transcribe_youtube` or `transcribe_file` instead of guessing at scraping code. The stdio
 //! transport is one JSON-RPC message per line, so the protocol is small
 //! enough to speak directly.
 //!
@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::api::Client;
 use crate::format::{format_project, Format, FormatOptions};
 use crate::output::pretty;
-use crate::transcribe::{start_youtube, wait_for_project, WaitOptions};
+use crate::transcribe::{start_file, start_youtube, wait_for_project, WaitOptions};
 
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -42,6 +42,21 @@ pub fn tool_definitions() -> Value {
                     "format": format,
                 },
                 "required": ["url"],
+            },
+        },
+        {
+            "name": "transcribe_file",
+            "description": "Transcribe a local audio or video file (mp3, m4a, wav, mp4, mov, ...) to \
+    text. Use this when the user wants the transcript, captions or subtitles of a recording or media \
+    file on this computer. Uploads the file, waits for processing to finish, and returns \
+    speaker-labeled, timecoded text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path of the file on the computer that runs this server"},
+                    "format": format,
+                },
+                "required": ["path"],
             },
         },
         {
@@ -72,6 +87,10 @@ enum Call {
     Transcribe {
         url: String,
         language: Option<String>,
+        format: Format,
+    },
+    TranscribeFile {
+        path: String,
         format: Format,
     },
     GetTranscript {
@@ -116,6 +135,10 @@ fn parse_call(params: &Value) -> Result<Call, String> {
             },
             format: format()?,
         }),
+        "transcribe_file" => Ok(Call::TranscribeFile {
+            path: required("path")?,
+            format: format()?,
+        }),
         "get_transcript" => Ok(Call::GetTranscript {
             project_id: required("projectId")?,
             format: format()?,
@@ -147,6 +170,20 @@ fn rendered(project: &Value, format: Format) -> Result<String, String> {
     }
 }
 
+/// Waits for a started transcription and renders it.
+fn finished(client: &Client, id: &str, format: Format) -> Result<String, String> {
+    let project = wait_for_project(
+        client,
+        id,
+        WaitOptions {
+            timeout: TRANSCRIBE_TIMEOUT,
+            ..WaitOptions::default()
+        },
+    )
+    .map_err(|e| e.message)?;
+    rendered(&project, format)
+}
+
 fn execute(client: &Client, call: Call) -> Result<String, String> {
     let text = |e: crate::api::ApiError| e.message;
     match call {
@@ -156,16 +193,11 @@ fn execute(client: &Client, call: Call) -> Result<String, String> {
             format,
         } => {
             let id = start_youtube(client, &url, language.as_deref(), None).map_err(text)?;
-            let project = wait_for_project(
-                client,
-                &id,
-                WaitOptions {
-                    timeout: TRANSCRIBE_TIMEOUT,
-                    ..WaitOptions::default()
-                },
-            )
-            .map_err(text)?;
-            rendered(&project, format)
+            finished(client, &id, format)
+        }
+        Call::TranscribeFile { path, format } => {
+            let id = start_file(client, &path, None, None).map_err(text)?;
+            finished(client, &id, format)
         }
         Call::GetTranscript { project_id, format } => {
             let project = client.get_project(&project_id).map_err(text)?;
@@ -326,6 +358,21 @@ mod tests {
     }
 
     #[test]
+    fn transcribe_file_needs_a_path_and_defaults_to_txt() {
+        let call =
+            parse_call(&json!({"name": "transcribe_file", "arguments": {"path": "/tmp/talk.mp3"}}));
+        assert_eq!(
+            call,
+            Ok(Call::TranscribeFile {
+                path: "/tmp/talk.mp3".into(),
+                format: Format::Txt
+            })
+        );
+        let call = parse_call(&json!({"name": "transcribe_file", "arguments": {"format": "srt"}}));
+        assert!(call.unwrap_err().contains("path"));
+    }
+
+    #[test]
     fn an_unknown_format_is_rejected() {
         let call = parse_call(
             &json!({"name": "get_transcript", "arguments": {"projectId": "p", "format": "docx"}}),
@@ -363,7 +410,12 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["transcribe_youtube", "get_transcript", "list_projects"]
+            [
+                "transcribe_youtube",
+                "transcribe_file",
+                "get_transcript",
+                "list_projects"
+            ]
         );
         for tool in tools.as_array().unwrap() {
             assert_eq!(tool["inputSchema"]["type"], "object");

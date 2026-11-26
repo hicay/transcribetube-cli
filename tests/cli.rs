@@ -60,6 +60,9 @@ fn run(api: &MockApi, env: &[(&str, &str)], args: &[&str]) -> Run {
 const KEY: [(&str, &str); 1] = [("TUBE_API_KEY", "test-key")];
 
 fn route(req: &Request) -> (u16, String) {
+    if let Some(response) = upload_routes(req) {
+        return response;
+    }
     match (req.method.as_str(), req.path.split('?').next().unwrap()) {
         ("GET", "/api/list") if req.header("api-key") == Some("test-key") => ok(json!([
             {"id": "p1", "name": "First", "youtubeId": "dQw4w9WgXcQ", "state": "done", "createdAt": "2026-01-02T00:00:00.000Z"},
@@ -537,4 +540,232 @@ fn a_done_project_without_a_transcript_is_a_failure_not_an_empty_file() {
         assert_eq!((r.code, r.stdout.as_str()), (4, ""), "{}", r.stderr);
         assert!(r.stderr.contains("returned no transcript"), "{}", r.stderr);
     }
+}
+
+#[test]
+fn transcribe_uploads_a_local_file_and_prints_only_the_project_id() {
+    let api = MockApi::start(route);
+    let bytes = media_bytes();
+    let file = media_file("talk.mp3", &bytes);
+    let path = file.to_str().unwrap();
+
+    let r = run(&api, &KEY, &["transcribe", path]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(r.stdout, "p1\n");
+    assert_eq!(
+        r.stderr,
+        format!("uploading {path} (195 kB)\nSubmitted. Track with: tube project watch p1\n")
+    );
+
+    let seen = api.requests();
+    let calls: Vec<(&str, &str)> = seen
+        .iter()
+        .map(|q| (q.method.as_str(), q.path.split('?').next().unwrap()))
+        .collect();
+    let key = format!("{UPLOAD_PREFIX}talk.mp3");
+    assert_eq!(
+        calls,
+        [
+            ("POST", "/api/upload-url"),
+            ("PUT", format!("/s3/{key}").as_str()),
+            ("POST", "/api/transcribeFile"),
+        ]
+    );
+    assert_eq!(
+        seen[0].json(),
+        json!({"fileName": "talk.mp3", "fileType": "audio/mpeg"})
+    );
+    assert_eq!(seen[1].header("content-type"), Some("audio/mpeg"));
+    assert_eq!(seen[1].header("api-key"), None);
+    assert!(
+        seen[1].raw == bytes,
+        "the upload must be byte for byte the file"
+    );
+    assert_eq!(
+        seen[2].json(),
+        json!({
+            "name": "talk.mp3",
+            "fileUrl": format!("https://videoven-data.s3.amazonaws.com/{key}::{key}"),
+        })
+    );
+}
+
+#[test]
+fn a_local_file_honours_wait_format_and_json_like_a_url_does() {
+    let api = MockApi::start(route);
+    let file = media_file("clip.mp4", &media_bytes());
+    let path = file.to_str().unwrap();
+
+    let txt = run(&api, &KEY, &["transcribe", path, "--wait"]);
+    assert_eq!(txt.code, 0, "{}", txt.stderr);
+    assert_eq!(
+        txt.stdout,
+        "[00:00:00] Speaker 0: Hello world.\n[00:00:05] Speaker 1: Hi there.\n"
+    );
+    assert_eq!(
+        txt.stderr,
+        format!("uploading {path} (195 kB)\nstate: done\n")
+    );
+
+    let srt = run(&api, &KEY, &["transcribe", path, "-w", "-f", "srt"]);
+    assert_eq!(srt.code, 0, "{}", srt.stderr);
+    assert!(srt
+        .stdout
+        .starts_with("1\n00:00:00,000 --> 00:00:05,250\nSpeaker 0: Hello world.\n\n2\n"));
+
+    let waited = run(&api, &KEY, &["--json", "transcribe", path, "--wait"]);
+    assert_eq!((waited.code, waited.stderr.as_str()), (0, ""));
+    let parsed: Value = serde_json::from_str(&waited.stdout).unwrap();
+    assert_eq!(parsed["text"], TRANSCRIPT);
+
+    let started = run(&api, &KEY, &["transcribe", path, "--json"]);
+    assert_eq!((started.code, started.stderr.as_str()), (0, ""));
+    assert_eq!(
+        serde_json::from_str::<Value>(&started.stdout).unwrap(),
+        json!({"id": "p1"})
+    );
+    let uploads = api.requests().iter().filter(|q| q.method == "PUT").count();
+    assert_eq!(uploads, 4);
+}
+
+#[test]
+fn a_missing_file_or_a_directory_exits_1_without_calling_the_api() {
+    let api = MockApi::start(route);
+    let dir = temp_dir();
+    let missing = dir.join("nope.mp3");
+
+    let r = run(&api, &KEY, &["transcribe", missing.to_str().unwrap()]);
+    assert_eq!((r.code, r.stdout.as_str()), (1, ""));
+    assert!(r.stderr.starts_with("error: No such file"), "{}", r.stderr);
+
+    let r = run(&api, &KEY, &["transcribe", dir.to_str().unwrap(), "--wait"]);
+    assert_eq!((r.code, r.stdout.as_str()), (1, ""));
+    assert!(r.stderr.contains("is a directory"), "{}", r.stderr);
+
+    assert!(api.requests().is_empty());
+}
+
+#[test]
+fn a_rejected_upload_exits_1_and_creates_no_project() {
+    let api = MockApi::start(|req| {
+        if req.method == "PUT" {
+            return s3_denied();
+        }
+        route(req)
+    });
+    let file = media_file("talk.mp3", &media_bytes());
+    let r = run(
+        &api,
+        &KEY,
+        &["transcribe", file.to_str().unwrap(), "--wait"],
+    );
+    assert_eq!((r.code, r.stdout.as_str()), (1, ""));
+    assert!(
+        r.stderr.ends_with(
+            "error: The upload was rejected with status 403 (AccessDenied). Nothing was transcribed.\n"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(api
+        .requests()
+        .iter()
+        .all(|q| q.path != "/api/transcribeFile" && !q.path.starts_with("/api/detail")));
+}
+
+#[test]
+fn a_file_upload_without_credit_exits_3() {
+    let api = MockApi::start(|req| {
+        if req.path == "/api/transcribeFile" {
+            return error(402, "Not enough credit for user: u1.");
+        }
+        route(req)
+    });
+    let file = media_file("talk.mp3", b"abc");
+    let r = run(&api, &KEY, &["transcribe", file.to_str().unwrap()]);
+    assert_eq!((r.code, r.stdout.as_str()), (3, ""));
+}
+
+#[test]
+fn a_webhook_is_refused_for_a_local_file_before_anything_is_uploaded() {
+    let api = MockApi::start(route);
+    let file = media_file("talk.mp3", b"abc");
+    let r = run(
+        &api,
+        &KEY,
+        &[
+            "transcribe",
+            file.to_str().unwrap(),
+            "--webhook",
+            "https://hook.example/x",
+        ],
+    );
+    assert_eq!((r.code, r.stdout.as_str()), (1, ""));
+    assert!(r.stderr.contains("--webhook"), "{}", r.stderr);
+    assert!(api.requests().is_empty());
+}
+
+#[test]
+fn the_timeout_flag_bounds_the_wait() {
+    // Never finishes: without --timeout these would poll for 15 minutes.
+    let api = MockApi::start(|req| {
+        if req.method == "POST" {
+            return ok(json!({"success": true, "projectId": "p2"}));
+        }
+        ok(in_progress("p2", "transcription"))
+    });
+
+    let r = run(
+        &api,
+        &KEY,
+        &["transcribe", "dQw4w9WgXcQ", "--wait", "--timeout", "0.001"],
+    );
+    assert_eq!((r.code, r.stdout.as_str()), (1, ""));
+    assert_eq!(
+        r.stderr,
+        "state: transcription\nerror: Timed out waiting for transcription. Check later with: tube project watch p2\n"
+    );
+
+    let r = run(
+        &api,
+        &KEY,
+        &["project", "watch", "p2", "--timeout", "0.001"],
+    );
+    assert_eq!((r.code, r.stdout.as_str()), (1, ""));
+    assert!(r.stderr.contains("Timed out waiting"), "{}", r.stderr);
+
+    // One poll each: the next one would already be past the deadline.
+    let polls = api.requests().iter().filter(|q| q.method == "GET").count();
+    assert_eq!(polls, 2);
+}
+
+#[test]
+fn a_timeout_long_enough_lets_the_wait_finish() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&calls);
+    let api = MockApi::start(move |_| match counter.fetch_add(1, Ordering::SeqCst) {
+        0 => ok(in_progress("p9", "upload")),
+        _ => ok(done_project("p9")),
+    });
+    // 6 seconds: more than the 2 seconds before the second poll.
+    let r = run(&api, &KEY, &["project", "watch", "p9", "--timeout", "0.1"]);
+    assert_eq!(
+        (r.code, r.stdout.as_str(), r.stderr.as_str()),
+        (0, "done p9\n", "state: upload\nstate: done\n")
+    );
+}
+
+#[test]
+fn a_bad_timeout_is_a_usage_error() {
+    let api = MockApi::start(route);
+    for args in [
+        vec!["project", "watch", "p1", "--timeout", "0"],
+        vec!["project", "watch", "p1", "--timeout", "soon"],
+        // Nothing to time out without --wait.
+        vec!["transcribe", "dQw4w9WgXcQ", "--timeout", "5"],
+    ] {
+        let r = run(&api, &KEY, &args);
+        assert_eq!((r.code, r.stdout.as_str()), (2, ""), "{args:?}");
+    }
+    assert!(api.requests().is_empty());
 }
