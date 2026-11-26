@@ -1,0 +1,55 @@
+{
+  "name": "@transcribetube/cli",
+  "version": "0.1.0",
+  "description": "Transcribe YouTube videos to text, SRT, VTT, or markdown from your terminal or from AI assistants via MCP.",
+  "keywords": [
+    "youtube",
+    "youtube-transcript",
+    "transcript",
+    "subtitles",
+    "captions",
+    "srt",
+    "vtt",
+    "speech-to-text",
+    "transcription",
+    "mcp",
+    "mcp-server",
+    "ai",
+    "claude",
+    "cli"
+  ],
+  "homepage": "https://transcribetube.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hicay/transcribetube-cli.git"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "tube": "bin/tube.js",
+    "transcribetube-mcp": "bin/transcribetube-mcp.js"
+  },
+  "files": [
+    "bin",
+    "install.js",
+    "checksums.json",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

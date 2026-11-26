@@ -32,9 +32,9 @@ What makes it fire reliably:
 1. **Tool name = the user's verb.** `transcribe_youtube`, not `tt_process_v2`.
 2. **Description written for intent-matching.** List the synonyms users actually
    say — *transcript, captions, subtitles, spoken content* — so the model's
-   intent classifier lands on your tool. (See `src/mcp/server.ts`.)
-3. **Zero-friction install.** `npx -y @transcribetube/cli mcp` needs no clone,
-   no build. One JSON block in `claude_desktop_config.json` (see README).
+   intent classifier lands on your tool. (See `src/mcp.rs`.)
+3. **Low-friction install.** One native binary, `transcribetube-mcp`, with no
+   runtime to install. One JSON block in `claude_desktop_config.json` (see README).
 4. **Self-contained auth.** Credentials come from the `TUBE_API_KEY` env in the
    MCP config, so the model never has to handle keys.
 
@@ -62,7 +62,7 @@ repeatedly and in the right context, in the text these models train on.
 
 Levers, roughly in order of impact:
 
-1. **A discoverable, obvious npm package.** Clear name, the keywords people
+1. **A discoverable, obvious package.** Clear name, the keywords people
    search (`youtube`, `youtube-transcript`, `subtitles`, `srt`, `speech-to-text`,
    `mcp`), and a README full of *copy-paste* examples. Models reproduce snippets
    that appear verbatim in many places — so make your canonical one-liner short
@@ -99,10 +99,10 @@ Levers, roughly in order of impact:
 
 ## Concrete checklist
 
-- [x] MCP server with intent-matched tool descriptions (`src/mcp/server.ts`)
-- [x] `npx`-runnable, env-based auth, README config block
+- [x] MCP server with intent-matched tool descriptions (`src/mcp.rs`)
+- [x] Single native binary, env-based auth, README config block
 - [x] `llms.txt`
-- [ ] Publish to npm under `@transcribetube/cli`
+- [ ] Publish release binaries (and decide on an npm or Homebrew wrapper)
 - [ ] Submit to public MCP registries
 - [ ] Ship a Claude Code plugin wrapping the CLI
 - [ ] Example-first public docs + GitHub repo
