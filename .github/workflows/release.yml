@@ -1,8 +1,12 @@
-# Builds the binaries for a version tag and attaches them to a GitHub release.
+# A version tag builds the binaries, publishes a GitHub release, and publishes
+# the npm package (which downloads the matching binary when installed).
 #
 # Release flow:
-#   set `version` in Cargo.toml, commit
+#   set `version` in Cargo.toml (npm/package.json follows the tag), commit
 #   git tag vX.Y.Z && git push origin main --tags
+#
+# npm needs the `NPM_TOKEN` repository secret (an npm Automation token for the
+# @transcribetube scope). Without it the npm step is skipped.
 
 name: Release
 
@@ -12,7 +16,7 @@ on:
             - 'v*'
 
 permissions:
-    contents: write
+    contents: read
 
 jobs:
     build:
@@ -22,8 +26,9 @@ jobs:
                 include:
                     - { os: macos-latest, target: aarch64-apple-darwin }
                     - { os: macos-latest, target: x86_64-apple-darwin }
-                    - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
-                    - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+                    # Static (musl) Linux builds run on any distribution, old or new.
+                    - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+                    - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
                     - { os: windows-latest, target: x86_64-pc-windows-msvc }
         runs-on: ${{ matrix.os }}
         steps:
@@ -42,6 +47,12 @@ jobs:
                     exit 1
                   fi
 
+            - name: Install musl tools
+              if: contains(matrix.target, 'musl')
+              run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+            # The Intel macOS build is cross-compiled on Apple silicon and
+            # runs its tests through Rosetta.
             - run: cargo test --release --target ${{ matrix.target }}
             - run: cargo build --release --target ${{ matrix.target }}
 
@@ -59,11 +70,72 @@ jobs:
                     tar -czf "$NAME.tar.gz" "$NAME"
                   fi
 
-            - name: Attach to the release
-              shell: bash
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ matrix.target }}
+                  path: |
+                      tube-*.tar.gz
+                      tube-*.zip
+                  if-no-files-found: error
+
+    release:
+        needs: build
+        runs-on: ubuntu-24.04
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/download-artifact@v4
+              with:
+                  path: dist
+                  merge-multiple: true
+            - name: Publish the GitHub release
               env:
                   GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
               run: |
+                  cd dist
+                  sha256sum tube-* > SHA256SUMS
+                  cat SHA256SUMS
                   TAG="${GITHUB_REF#refs/tags/}"
-                  gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes || true
-                  gh release upload "$TAG" $(ls tube-*.tar.gz tube-*.zip 2>/dev/null) --clobber
+                  gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes
+                  gh release upload "$TAG" tube-* SHA256SUMS --clobber
+
+    npm:
+        needs: release
+        runs-on: ubuntu-24.04
+        permissions:
+            contents: read
+            id-token: write # npm provenance
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  registry-url: 'https://registry.npmjs.org'
+            - name: Publish to npm
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+              run: |
+                  if [ -z "$NODE_AUTH_TOKEN" ]; then
+                    echo "::warning::NPM_TOKEN is not set; skipping the npm publish."
+                    exit 0
+                  fi
+                  TAG="${GITHUB_REF#refs/tags/}"
+                  cd npm
+                  npm version "${TAG#v}" --no-git-tag-version --allow-same-version
+                  # Pin the archives this version may download.
+                  gh release download "$TAG" --pattern SHA256SUMS --dir .
+                  node -e '
+                    const fs = require("fs");
+                    const sums = {};
+                    for (const line of fs.readFileSync("SHA256SUMS", "utf8").trim().split("\n")) {
+                      const [hash, file] = line.trim().split(/\s+/);
+                      sums[file] = hash;
+                    }
+                    fs.writeFileSync("checksums.json", JSON.stringify(sums, null, 2) + "\n");
+                  '
+                  rm SHA256SUMS
+                  cp ../README.md README.md
+                  npm publish --provenance

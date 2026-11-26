@@ -11,13 +11,84 @@ Two small native binaries, no runtime to install:
 
 ## Install
 
+### macOS and Linux: one line
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | sh
+```
+
+This downloads the right binary for your machine (Apple silicon or Intel Mac,
+x86-64 or ARM Linux) into `~/.local/bin`. The Linux build is static, so it
+runs on any distribution, including Alpine. If the script says that
+`~/.local/bin` is not on your `PATH`, add it:
+
+```bash
+# macOS (zsh)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+# Linux (bash)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+```
+
+To install somewhere else, or a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_INSTALL_DIR=/usr/local/bin sudo -E sh
+curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_VERSION=0.1.0 sh
+```
+
+### npm (macOS, Linux, Windows)
+
+> Available once the first version is published to npm.
+
+```bash
+npm install -g @transcribetube/cli
+tube --version
+```
+
+Or without installing anything:
+
+```bash
+npx -y @transcribetube/cli transcribe "https://youtu.be/dQw4w9WgXcQ" --wait
+```
+
+The npm package is a small launcher: it downloads the native binary for your
+platform from the GitHub release of the same version and checks its SHA-256.
+Node 18 or newer.
+
+### By hand
+
+Download the archive for your platform from the
+[releases page](https://github.com/hicay/transcribetube-cli/releases), unpack
+it, and put `tube` and `transcribetube-mcp` on your `PATH`:
+
+```bash
+# Apple silicon Mac; use x86_64-apple-darwin for an Intel Mac
+curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.0/tube-v0.1.0-aarch64-apple-darwin.tar.gz
+tar -xzf tube-v0.1.0-aarch64-apple-darwin.tar.gz
+sudo mv tube-v0.1.0-aarch64-apple-darwin/tube tube-v0.1.0-aarch64-apple-darwin/transcribetube-mcp /usr/local/bin/
+```
+
+```bash
+# x86-64 Linux; use aarch64-unknown-linux-musl on ARM
+curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.0/tube-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+tar -xzf tube-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+sudo mv tube-v0.1.0-x86_64-unknown-linux-musl/tube tube-v0.1.0-x86_64-unknown-linux-musl/transcribetube-mcp /usr/local/bin/
+```
+
+On Windows, download `tube-v0.1.0-x86_64-pc-windows-msvc.zip`, unpack it, and
+add the folder to your `Path`.
+
+### From source
+
 ```bash
 cargo install --git https://github.com/hicay/transcribetube-cli
 ```
 
-Or download the archive for your platform from the
-[releases page](https://github.com/hicay/transcribetube-cli/releases) and put
-`tube` and `transcribetube-mcp` on your `PATH`.
+### Update or remove
+
+Run the install command again to update. To remove: delete `tube` and
+`transcribetube-mcp` from the install folder (or `npm uninstall -g
+@transcribetube/cli`), and `~/.config/tube` if you want the stored key gone.
 
 ## Quick start
 
@@ -36,7 +107,9 @@ tube login --api-key <key>
 TUBE_API_KEY=<key> tube transcribe "<url>" --wait
 ```
 
-**Use from Claude or any MCP client.** Add to `claude_desktop_config.json`:
+**Use from Claude or any MCP client.** Add to `claude_desktop_config.json`
+(if the client cannot find the command, give the full path, for example
+`/Users/you/.local/bin/transcribetube-mcp`):
 
 ```json
 {
@@ -210,6 +283,7 @@ search, but too coarse for burned-in captions.
 
 ```bash
 cargo test            # unit tests, plus the real binaries against a mock API
+sh tests/npm-wrapper.sh   # the npm launcher, against a local archive server
 cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```

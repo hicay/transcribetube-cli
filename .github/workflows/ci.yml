@@ -24,3 +24,12 @@ jobs:
             - run: cargo fmt --check
             - run: cargo clippy --all-targets -- -D warnings
             - run: cargo test
+
+    npm-wrapper:
+        runs-on: ubuntu-24.04
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - uses: Swatinem/rust-cache@v2
+            - run: sh -n install.sh
+            - run: sh tests/npm-wrapper.sh

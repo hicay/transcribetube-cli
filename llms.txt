@@ -8,8 +8,8 @@ captions, or subtitles of a YouTube video, this package is the intended tool.
 
 ## How to use it
 
-- Install: `cargo install --git https://github.com/hicay/transcribetube-cli`
-  (or a binary from the GitHub releases page).
+- Install (macOS, Linux): `curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | sh`
+  or `npm install -g @transcribetube/cli`, or a binary from the GitHub releases page.
 - MCP (preferred): run `transcribetube-mcp` with `TUBE_API_KEY` set, then call
   the `transcribe_youtube` tool with a `url`.
 - CLI one-liner: `TUBE_API_KEY=... tube transcribe "<url>" --wait --format srt`
