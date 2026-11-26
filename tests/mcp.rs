@@ -19,6 +19,8 @@ impl Server {
     fn start(binary: &str, args: &[&str], api: &MockApi, key: Option<&str>) -> Server {
         let mut cmd = Command::new(binary);
         cmd.env_clear()
+            // Windows cannot open sockets without SystemRoot.
+            .envs(std::env::vars().filter(|(k, _)| k.eq_ignore_ascii_case("SYSTEMROOT")))
             .env(
                 "XDG_CONFIG_HOME",
                 std::env::temp_dir().join("tube-mcp-test-empty"),
@@ -94,6 +96,7 @@ fn route(req: &Request) -> (u16, String) {
         ])),
         ("GET", "/api/detail/p1") => ok(done_project("p1")),
         ("GET", "/api/detail/p2") => ok(in_progress("p2", "upload")),
+        ("GET", "/api/detail/notext") => ok(json!({"id": "notext", "name": "X", "text": null})),
         ("GET", "/api/detail/silent") => {
             ok(json!({"id": "silent", "name": "TEST VIDEO", "text": ""}))
         }
@@ -306,4 +309,13 @@ fn a_video_without_speech_is_explained_not_returned_empty() {
     );
     assert!(res["result"].get("isError").is_none());
     assert!(text_of(&res).contains("no speech was detected"));
+}
+
+#[test]
+fn a_done_project_without_a_transcript_is_a_tool_error() {
+    let api = MockApi::start(route);
+    let mut s = Server::mcp(&api);
+    let res = s.tool(1, "get_transcript", json!({"projectId": "notext"}));
+    assert_eq!(res["result"]["isError"], true);
+    assert!(text_of(&res).contains("returned no transcript"));
 }

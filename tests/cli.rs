@@ -40,6 +40,8 @@ fn finish(output: Output) -> Run {
 fn tube(home: &PathBuf, api: Option<&MockApi>, env: &[(&str, &str)], args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tube"));
     cmd.env_clear()
+        // Windows cannot open sockets without SystemRoot.
+        .envs(std::env::vars().filter(|(k, _)| k.eq_ignore_ascii_case("SYSTEMROOT")))
         .env("XDG_CONFIG_HOME", home)
         .env(
             "TUBE_API_URL",
@@ -67,6 +69,9 @@ fn route(req: &Request) -> (u16, String) {
         ("GET", "/api/detail/p1") => ok(done_project("p1")),
         ("GET", "/api/detail/p2") => ok(in_progress("p2", "upload")),
         ("GET", "/api/detail/p3") => ok(failed_project("p3")),
+        ("GET", "/api/detail/notext") => ok(
+            json!({"id": "notext", "name": "X", "youtubeId": "jNQXAC9IVRw", "language": null, "text": null}),
+        ),
         ("GET", "/api/detail/silent") => ok(
             json!({"id": "silent", "name": "TEST VIDEO", "youtubeId": "C0DPdy98e4c", "language": "en", "text": ""}),
         ),
@@ -519,4 +524,17 @@ fn a_video_without_speech_says_so_instead_of_printing_nothing() {
     let r = run(&api, &KEY, &["transcript", "silent", "-f", "srt"]);
     assert_eq!((r.code, r.stdout.as_str()), (0, "\n"));
     assert!(r.stderr.contains("the transcript is empty"), "{}", r.stderr);
+}
+
+#[test]
+fn a_done_project_without_a_transcript_is_a_failure_not_an_empty_file() {
+    let api = MockApi::start(route);
+    for args in [
+        vec!["transcript", "notext"],
+        vec!["transcript", "notext", "-f", "srt"],
+    ] {
+        let r = run(&api, &KEY, &args);
+        assert_eq!((r.code, r.stdout.as_str()), (4, ""), "{}", r.stderr);
+        assert!(r.stderr.contains("returned no transcript"), "{}", r.stderr);
+    }
 }

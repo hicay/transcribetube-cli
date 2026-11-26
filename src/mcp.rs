@@ -137,12 +137,14 @@ fn parse_call(params: &Value) -> Result<Call, String> {
 }
 
 /// An empty tool result reads as a failure to a model; say what happened.
-fn rendered(project: &Value, format: Format) -> String {
-    let text = project.get("text").and_then(Value::as_str).unwrap_or("");
-    if text.trim().is_empty() {
-        return "The transcript is empty: no speech was detected in this video.".to_string();
+fn rendered(project: &Value, format: Format) -> Result<String, String> {
+    match project.get("text").and_then(Value::as_str) {
+        None => Err(crate::api::NO_TRANSCRIPT.to_string()),
+        Some(text) if text.trim().is_empty() => {
+            Ok("The transcript is empty: no speech was detected in this video.".to_string())
+        }
+        Some(_) => Ok(format_project(project, format, FormatOptions::default())),
     }
-    format_project(project, format, FormatOptions::default())
 }
 
 fn execute(client: &Client, call: Call) -> Result<String, String> {
@@ -163,12 +165,12 @@ fn execute(client: &Client, call: Call) -> Result<String, String> {
                 },
             )
             .map_err(text)?;
-            Ok(rendered(&project, format))
+            rendered(&project, format)
         }
         Call::GetTranscript { project_id, format } => {
             let project = client.get_project(&project_id).map_err(text)?;
             match crate::api::project_state(&project).as_str() {
-                "done" => Ok(rendered(&project, format)),
+                "done" => rendered(&project, format),
                 "error" => Err(project
                     .get("errorMessage")
                     .and_then(Value::as_str)

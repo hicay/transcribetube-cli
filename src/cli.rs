@@ -196,7 +196,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
             if cli.json {
                 print_json(&project);
             } else {
-                note_if_empty(&project);
+                require_text(&project)?;
                 out(&format_project(&project, *format, FormatOptions::default()));
             }
             Ok(())
@@ -256,12 +256,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     )))
                 }
             }
-            if project.get("text").and_then(Value::as_str).is_none() {
-                return Err(ApiError::local(
-                    "The project is done but has no transcript text.",
-                ));
-            }
-            note_if_empty(&project);
+            require_text(&project)?;
             out(&format_project(
                 &project,
                 *format,
@@ -279,15 +274,21 @@ fn dispatch(cli: &Cli) -> Result<()> {
     }
 }
 
-/// A video without speech finishes with an empty transcript; say so, since
-/// empty output with exit code 0 otherwise looks like a bug.
-fn note_if_empty(project: &Value) {
-    let text = project.get("text").and_then(Value::as_str).unwrap_or("");
-    if text.trim().is_empty() {
-        info(
-            "note: the transcript is empty (no speech was detected).",
-            false,
-        );
+/// A finished project should carry its transcript. Two things can be wrong:
+/// no text at all (the API marked it done without one), or empty text (a
+/// video without speech). Empty output with exit code 0 would hide both.
+fn require_text(project: &Value) -> Result<()> {
+    match project.get("text").and_then(Value::as_str) {
+        None => Err(ApiError::new(crate::api::NO_TRANSCRIPT, 422)),
+        Some(text) => {
+            if text.trim().is_empty() {
+                info(
+                    "note: the transcript is empty (no speech was detected).",
+                    false,
+                );
+            }
+            Ok(())
+        }
     }
 }
 

@@ -46,6 +46,10 @@ impl fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// Shown when the API reports a project as done but returns no transcript.
+pub const NO_TRANSCRIPT: &str =
+    "The project is marked done but the API returned no transcript for it.";
+
 pub type Result<T> = std::result::Result<T, ApiError>;
 
 pub struct Client {
