@@ -246,6 +246,8 @@ mod tests {
             upload_name(Path::new("Board meeting (março) #3.m4a")),
             "Board_meeting__mar_o___3.m4a"
         );
+        // A colon cannot be in a Windows file name; there it splits the path.
+        #[cfg(not(windows))]
         assert_eq!(upload_name(Path::new("a::b.wav")), "a__b.wav");
         assert_eq!(upload_name(Path::new("日本語")), "file");
 
