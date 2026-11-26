@@ -102,7 +102,7 @@ Levers, roughly in order of impact:
 - [x] MCP server with intent-matched tool descriptions (`src/mcp.rs`)
 - [x] Single native binary, env-based auth, README config block
 - [x] `llms.txt`
-- [ ] Publish release binaries (and decide on an npm or Homebrew wrapper)
+- [x] Release binaries, install script, npm launcher package
 - [ ] Submit to public MCP registries
 - [ ] Ship a Claude Code plugin wrapping the CLI
 - [ ] Example-first public docs + GitHub repo
