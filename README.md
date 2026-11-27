@@ -33,7 +33,7 @@ To install somewhere else, or a specific version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_INSTALL_DIR=/usr/local/bin sudo -E sh
-curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_VERSION=0.1.1 sh
+curl -fsSL https://raw.githubusercontent.com/hicay/transcribetube-cli/main/install.sh | TUBE_VERSION=0.1.2 sh
 ```
 
 ### npm (macOS, Linux, Windows)
@@ -61,19 +61,19 @@ it, and put `tube` and `transcribetube-mcp` on your `PATH`:
 
 ```bash
 # Apple silicon Mac; use x86_64-apple-darwin for an Intel Mac
-curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.1/tube-v0.1.1-aarch64-apple-darwin.tar.gz
-tar -xzf tube-v0.1.1-aarch64-apple-darwin.tar.gz
-sudo mv tube-v0.1.1-aarch64-apple-darwin/tube tube-v0.1.1-aarch64-apple-darwin/transcribetube-mcp /usr/local/bin/
+curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.2/tube-v0.1.2-aarch64-apple-darwin.tar.gz
+tar -xzf tube-v0.1.2-aarch64-apple-darwin.tar.gz
+sudo mv tube-v0.1.2-aarch64-apple-darwin/tube tube-v0.1.2-aarch64-apple-darwin/transcribetube-mcp /usr/local/bin/
 ```
 
 ```bash
 # x86-64 Linux; use aarch64-unknown-linux-musl on ARM
-curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.1/tube-v0.1.1-x86_64-unknown-linux-musl.tar.gz
-tar -xzf tube-v0.1.1-x86_64-unknown-linux-musl.tar.gz
-sudo mv tube-v0.1.1-x86_64-unknown-linux-musl/tube tube-v0.1.1-x86_64-unknown-linux-musl/transcribetube-mcp /usr/local/bin/
+curl -fsSLO https://github.com/hicay/transcribetube-cli/releases/download/v0.1.2/tube-v0.1.2-x86_64-unknown-linux-musl.tar.gz
+tar -xzf tube-v0.1.2-x86_64-unknown-linux-musl.tar.gz
+sudo mv tube-v0.1.2-x86_64-unknown-linux-musl/tube tube-v0.1.2-x86_64-unknown-linux-musl/transcribetube-mcp /usr/local/bin/
 ```
 
-On Windows, download `tube-v0.1.1-x86_64-pc-windows-msvc.zip`, unpack it, and
+On Windows, download `tube-v0.1.2-x86_64-pc-windows-msvc.zip`, unpack it, and
 add the folder to your `Path`.
 
 ### From source
@@ -146,7 +146,9 @@ later that it still works:
 
 ```bash
 tube whoami
-# API key works (97 projects)
+# you@example.com
+# plan: Pro
+# credit: 300 of 600 minutes
 ```
 
 ### 2. Transcribe a video and wait for the text
@@ -285,7 +287,7 @@ you already have instead of spending minutes again.
 | `tube project list` | List your projects: id, state, created, name. `--limit`, `--page`. |
 | `tube project get <id>` | Show one project as JSON, as the API returns it. |
 | `tube project watch <id>` | Wait until the project is done or has failed. `--timeout <minutes>` (default 15). |
-| `tube whoami` | Check that the stored credentials work. |
+| `tube whoami` | Check the stored credentials and show the account: email, plan, minutes left. |
 | `tube login` / `tube logout` | Store or remove credentials. |
 | `tube account api-key` | Print your API key, `--create` to rotate it. Needs a session token (see below). |
 | `tube mcp` | Run the MCP server on stdio. |
@@ -309,13 +311,12 @@ The API has two kinds of credential, and each works only for its own routes:
 
 | Credential | Sent as | Works for |
 |---|---|---|
-| API key | `api-key` header | transcribing, listing, reading transcripts (everything most people need) |
-| Session token | `Authorization: Bearer` | account email, remaining credit, reading or rotating the API key |
+| API key | `api-key` header | transcribing, listing, reading transcripts, account and minutes left (everything most people need) |
+| Session token | `Authorization: Bearer` | reading or rotating the API key |
 
-So with an API key alone, `tube whoami` can confirm that the key works but
-cannot show the account email or credit, and `tube account api-key` is not
-available. A session token (`tube login --token <jwt>` or `TUBE_TOKEN`) adds
-those; it expires after about an hour.
+So an API key is enough for everything except `tube account api-key`. That
+one needs a session token (`tube login --token <jwt>` or `TUBE_TOKEN`), which
+expires after about an hour.
 
 ## Subtitles: what to expect
 
