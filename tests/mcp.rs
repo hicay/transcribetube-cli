@@ -86,8 +86,12 @@ impl Drop for Server {
 }
 
 fn route(req: &Request) -> (u16, String) {
-    if req.header("api-key") != Some("test-key") {
+    // The upload to storage carries no API key; everything else must.
+    if req.method != "PUT" && req.header("api-key") != Some("test-key") {
         return (401, json!({"message": "Unauthorized"}).to_string());
+    }
+    if let Some(response) = upload_routes(req) {
+        return response;
     }
     match (req.method.as_str(), req.path.split('?').next().unwrap()) {
         ("GET", "/api/list") => ok(json!([
@@ -134,7 +138,12 @@ fn handshake_then_tool_listing() {
         .collect();
     assert_eq!(
         names,
-        ["transcribe_youtube", "get_transcript", "list_projects"]
+        [
+            "transcribe_youtube",
+            "transcribe_file",
+            "get_transcript",
+            "list_projects"
+        ]
     );
 }
 
@@ -292,7 +301,7 @@ fn tube_mcp_is_the_same_server() {
     let api = MockApi::start(route);
     let mut s = Server::start(env!("CARGO_BIN_EXE_tube"), &["mcp"], &api, Some("test-key"));
     let tools = s.call(1, "tools/list", json!({}));
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 3);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
     let res = s.tool(2, "list_projects", json!({}));
     assert!(text_of(&res).contains("\"p1\""));
     assert_eq!(api.requests()[0].header("x-tt-source"), Some("mcp"));
@@ -318,4 +327,80 @@ fn a_done_project_without_a_transcript_is_a_tool_error() {
     let res = s.tool(1, "get_transcript", json!({"projectId": "notext"}));
     assert_eq!(res["result"]["isError"], true);
     assert!(text_of(&res).contains("returned no transcript"));
+}
+
+#[test]
+fn transcribe_file_uploads_the_file_and_returns_the_transcript() {
+    let api = MockApi::start(route);
+    let mut s = Server::mcp(&api);
+    let bytes = media_bytes();
+    let file = media_file("Interview 1.wav", &bytes);
+    let res = s.tool(
+        5,
+        "transcribe_file",
+        json!({"path": file.to_str().unwrap(), "format": "srt"}),
+    );
+    assert_eq!(res["id"], 5);
+    assert!(res["result"].get("isError").is_none(), "{res}");
+    assert!(text_of(&res).starts_with("1\n00:00:00,000 --> 00:00:05,250\n"));
+
+    let seen = api.requests();
+    let key = format!("{UPLOAD_PREFIX}Interview_1.wav");
+    assert_eq!(
+        seen[0].json(),
+        json!({"fileName": "Interview_1.wav", "fileType": "audio/wav"})
+    );
+    assert_eq!(seen[1].method, "PUT");
+    assert_eq!(seen[1].header("content-type"), Some("audio/wav"));
+    assert!(
+        seen[1].raw == bytes,
+        "the upload must be byte for byte the file"
+    );
+    assert_eq!(seen[2].path, "/api/transcribeFile");
+    assert_eq!(seen[2].header("x-tt-source"), Some("mcp"));
+    assert_eq!(
+        seen[2].json(),
+        json!({
+            "name": "Interview 1.wav",
+            "fileUrl": format!("https://videoven-data.s3.amazonaws.com/{key}::{key}"),
+        })
+    );
+}
+
+#[test]
+fn transcribe_file_failures_are_tool_errors() {
+    let api = MockApi::start(|req| {
+        if req.method == "PUT" {
+            return s3_denied();
+        }
+        route(req)
+    });
+    let mut s = Server::mcp(&api);
+
+    let missing = temp_dir().join("nope.mp3");
+    let res = s.tool(
+        1,
+        "transcribe_file",
+        json!({"path": missing.to_str().unwrap()}),
+    );
+    assert_eq!(res["result"]["isError"], true);
+    assert!(text_of(&res).starts_with("No such file"), "{res}");
+    assert!(api.requests().is_empty());
+
+    let file = media_file("talk.mp3", b"abc");
+    let res = s.tool(
+        2,
+        "transcribe_file",
+        json!({"path": file.to_str().unwrap()}),
+    );
+    assert_eq!(res["result"]["isError"], true);
+    assert!(text_of(&res).contains("rejected with status 403"), "{res}");
+    assert!(api
+        .requests()
+        .iter()
+        .all(|q| q.path != "/api/transcribeFile"));
+
+    // A call without a path is a protocol error, like any bad argument.
+    let res = s.tool(3, "transcribe_file", json!({"format": "srt"}));
+    assert_eq!(res["error"]["code"], -32602);
 }

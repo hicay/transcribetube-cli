@@ -1,7 +1,7 @@
 # TranscribeTube CLI
 
-Transcribe **YouTube videos** to text, subtitles (`.srt`/`.vtt`), markdown or
-JSON from your terminal, your CI pipeline, or directly from an AI assistant
+Transcribe **YouTube videos** and **your own audio or video files** to text,
+subtitles (`.srt`/`.vtt`), markdown or JSON from your terminal, your CI pipeline, or directly from an AI assistant
 via MCP.
 
 Two small native binaries, no runtime to install:
@@ -93,6 +93,7 @@ Run the install command again to update. To remove: delete `tube` and
 ```bash
 tube login          # opens the dashboard, paste your API key, done
 tube transcribe "https://youtu.be/dQw4w9WgXcQ" --wait --format srt > out.srt
+tube transcribe interview.m4a --wait > interview.txt   # a file on your disk
 ```
 
 `tube login` opens `app.transcribetube.com/settings/api-access` so you can
@@ -127,7 +128,8 @@ Claude Code one-liner:
 claude mcp add transcribetube --env TUBE_API_KEY=<key> -- transcribetube-mcp
 ```
 
-Tools exposed: `transcribe_youtube`, `get_transcript`, `list_projects`.
+Tools exposed: `transcribe_youtube`, `transcribe_file`, `get_transcript`,
+`list_projects`.
 See [`AI_INTEGRATION.md`](./AI_INTEGRATION.md) for how discovery works.
 
 ## How to use it
@@ -165,15 +167,38 @@ The `state:` lines go to stderr, so redirecting stdout gives a clean file. A
 watch URL, a `youtu.be` link, a Shorts link or the bare 11-character id all
 work. Transcribing uses your minutes: one per started minute of video.
 
-### 3. Save subtitles or another format
+### 3. Transcribe a file from your disk
+
+Give a path instead of a URL. The file is uploaded, then transcribed like any
+other project:
+
+```bash
+tube transcribe ~/Recordings/board-meeting.m4a --wait > board-meeting.txt
+```
+
+```text
+uploading /Users/you/Recordings/board-meeting.m4a (48.2 MB)
+state: upload
+state: transcription
+state: done
+```
+
+Audio and video both work (`mp3`, `m4a`, `wav`, `flac`, `ogg`, `mp4`, `mov`,
+`webm`, `mkv` and whatever else ffmpeg reads); video is converted to audio on
+the server. The file is streamed, so its size does not matter for memory. If
+the argument is an existing file it is uploaded; otherwise it is read as a
+YouTube URL or id. `--wait`, `--format` and `--json` work the same for both.
+`--webhook` is for YouTube URLs only.
+
+### 4. Save subtitles or another format
 
 ```bash
 tube transcribe "<url>" --wait --format srt > video.srt
 tube transcribe "<url>" --wait --format vtt > video.vtt
-tube transcribe "<url>" --wait --format md  > video.md
+tube transcribe talk.mp4 --wait --format md  > talk.md
 ```
 
-### 4. Start now, fetch later
+### 5. Start now, fetch later
 
 Without `--wait` the command prints only the project id and returns at once:
 
@@ -183,15 +208,23 @@ tube project watch "$id"                 # waits until it is done
 tube transcript "$id" --format srt > video.srt
 ```
 
+A long recording can take longer than the 15 minutes `--wait` and `tube
+project watch` wait by default. Give them more with `--timeout <minutes>`:
+
+```bash
+tube transcribe three-hour-hearing.mp4 --wait --timeout 60 > hearing.txt
+tube project watch "$id" --timeout 45
+```
+
 `tube transcript` works for any finished project, including ones made in the
-web app (uploads, recordings), not only YouTube ones:
+web app (uploads, recordings), not only ones started here:
 
 ```bash
 tube project list --limit 5
 tube transcript <id> --no-speakers --no-timecodes > plain.txt
 ```
 
-### 5. Use it in scripts
+### 6. Use it in scripts
 
 ```bash
 # Every video in a list, one .srt each; stop on the first real failure.
@@ -202,6 +235,13 @@ done < urls.txt
 ```
 
 ```bash
+# Every recording in a folder, one .txt next to each.
+for f in recordings/*.m4a; do
+  tube transcribe "$f" --wait --timeout 60 > "${f%.m4a}.txt" || exit $?
+done
+```
+
+```bash
 # JSON for other tools (no progress output in --json mode)
 tube project list --json | jq -r '.[] | select(.state == "done") | .id'
 tube transcript <id> --format json | jq '.transcription[0]'
@@ -209,24 +249,30 @@ tube transcript <id> --format json | jq '.transcription[0]'
 
 In CI, skip `tube login` and set `TUBE_API_KEY` as a secret instead. The exit
 code tells a script what went wrong (see below). To be called back when a
-transcription finishes, pass `--webhook https://your.server/hook`.
+transcription of a YouTube video finishes, pass `--webhook
+https://your.server/hook`.
 
-### 6. Let an AI assistant do it
+### 7. Let an AI assistant do it
 
 Add the MCP server (config under *Quick start*), then ask in plain words:
 
 > Get me the transcript of https://youtu.be/zhWDdy_5v2w and summarise it.
 
 The assistant calls `transcribe_youtube`, waits for the result, and works
-with the text. `get_transcript` and `list_projects` let it reuse transcripts
+with the text. For a recording on your computer it calls `transcribe_file`
+with the file's path ("transcribe ~/Downloads/call.m4a and list the action
+items"); the MCP server runs on your machine, so it reads the file itself.
+`get_transcript` and `list_projects` let it reuse transcripts
 you already have instead of spending minutes again.
 
 ### Good to know
 
 - A video without speech finishes with an empty transcript; the CLI says so
   on stderr.
-- `--wait` gives up after 15 minutes. The transcription keeps running; pick
-  it up with `tube project watch <id>`.
+- `--wait` gives up after 15 minutes, or after `--timeout <minutes>`. The
+  transcription keeps running; pick it up with `tube project watch <id>`.
+- If an upload fails, nothing is transcribed and no minutes are used; run the
+  command again.
 - `--lang` is accepted, but the API currently detects the language itself.
 - `tube logout` removes the stored key.
 
@@ -234,11 +280,11 @@ you already have instead of spending minutes again.
 
 | Command | Description |
 |---|---|
-| `tube transcribe <url>` | Start a transcription and print the project id. `--wait` waits and prints the transcript. `--format`, `--lang`, `--webhook`. |
+| `tube transcribe <path-or-url>` | Start a transcription of a local audio or video file (uploaded first) or a YouTube URL, and print the project id. `--wait` waits and prints the transcript; `--timeout <minutes>` sets how long (default 15). `--format`, `--lang`, `--webhook` (YouTube only). |
 | `tube transcript <id>` | Print a finished transcript. `--format txt\|srt\|vtt\|md\|json`, `--no-speakers`, `--no-timecodes`. |
 | `tube project list` | List your projects: id, state, created, name. `--limit`, `--page`. |
 | `tube project get <id>` | Show one project as JSON, as the API returns it. |
-| `tube project watch <id>` | Wait until the project is done or has failed. |
+| `tube project watch <id>` | Wait until the project is done or has failed. `--timeout <minutes>` (default 15). |
 | `tube whoami` | Check that the stored credentials work. |
 | `tube login` / `tube logout` | Store or remove credentials. |
 | `tube account api-key` | Print your API key, `--create` to rotate it. Needs a session token (see below). |
@@ -288,5 +334,5 @@ cargo build --release
 ```
 
 Layout: `src/api.rs` (HTTP client), `src/format.rs` (transcript parsing and
-output formats), `src/transcribe.rs` (start and wait), `src/mcp.rs` (MCP
+output formats), `src/transcribe.rs` (start, upload and wait), `src/mcp.rs` (MCP
 server), `src/cli.rs` (commands), `src/config.rs` (credentials).

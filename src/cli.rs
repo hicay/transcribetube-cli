@@ -1,6 +1,7 @@
 //! The `tube` command line.
 use std::io::{BufRead, IsTerminal};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
@@ -9,13 +10,15 @@ use crate::api::{project_state, ApiError, Client, Result};
 use crate::config;
 use crate::format::{format_project, Format, FormatOptions};
 use crate::output::{fail, info, json as print_json, out};
-use crate::transcribe::{start_youtube, wait_for_project, WaitOptions};
+use crate::transcribe::{
+    classify, start_file, start_youtube, wait_for_project, Source, WaitOptions,
+};
 
 #[derive(Parser)]
 #[command(
     name = "tube",
     version,
-    about = "TranscribeTube CLI: transcribe YouTube videos from the terminal or from AI assistants."
+    about = "TranscribeTube CLI: transcribe YouTube videos and audio or video files from the terminal or from AI assistants."
 )]
 struct Cli {
     /// API key (overrides config and TUBE_API_KEY)
@@ -48,10 +51,11 @@ enum Cmd {
         #[command(subcommand)]
         command: AccountCmd,
     },
-    /// Transcribe a YouTube URL. Prints the transcript with --wait.
+    /// Transcribe a local audio or video file, or a YouTube URL. Prints the transcript with --wait.
     Transcribe {
-        /// YouTube URL or 11-character video id
-        url: String,
+        /// Path to an audio or video file, a YouTube URL, or an 11-character video id
+        #[arg(value_name = "PATH_OR_URL")]
+        input: String,
         /// Language code (default: auto-detect)
         #[arg(short, long, value_name = "CODE")]
         lang: Option<String>,
@@ -60,7 +64,10 @@ enum Cmd {
         /// Wait for completion and print the transcript
         #[arg(short, long)]
         wait: bool,
-        /// POST to this URL when the transcription completes
+        /// With --wait: give up waiting after this many minutes
+        #[arg(long, value_name = "MINUTES", default_value = "15", requires = "wait", value_parser = parse_minutes)]
+        timeout: Duration,
+        /// POST to this URL when the transcription completes (YouTube only)
         #[arg(long, value_name = "URL")]
         webhook: Option<String>,
     },
@@ -108,7 +115,22 @@ enum ProjectCmd {
     /// Show a project as JSON.
     Get { id: String },
     /// Poll a project until it is done or has failed.
-    Watch { id: String },
+    Watch {
+        id: String,
+        /// Give up waiting after this many minutes
+        #[arg(long, value_name = "MINUTES", default_value = "15", value_parser = parse_minutes)]
+        timeout: Duration,
+    },
+}
+
+/// `--timeout`: minutes, fractions allowed (0.5 is 30 seconds), up to a day.
+fn parse_minutes(text: &str) -> std::result::Result<Duration, String> {
+    match text.trim().parse::<f64>() {
+        Ok(minutes) if minutes > 0.0 && minutes <= 1440.0 => {
+            Ok(Duration::from_secs_f64(minutes * 60.0))
+        }
+        _ => Err("expected a number of minutes, above 0 and at most 1440".to_string()),
+    }
 }
 
 const NEEDS_TOKEN: &str = "This needs a session token, which an API key cannot replace. \
@@ -172,14 +194,31 @@ fn dispatch(cli: &Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Transcribe {
-            url,
+            input,
             lang,
             format,
             wait,
+            timeout,
             webhook,
         } => {
             let client = client_for(cli, "cli");
-            let id = start_youtube(&client, url, lang.as_deref(), webhook.as_deref())?;
+            let id = match classify(input)? {
+                Source::File(_) => {
+                    if webhook.is_some() {
+                        return Err(ApiError::local(
+                            "--webhook works for YouTube URLs only; the API has no webhook for uploaded files. \
+Use --wait, or `tube project watch <id>`.",
+                        ));
+                    }
+                    let mut report = |bytes: u64| {
+                        info(&format!("uploading {input} ({})", human_size(bytes)), quiet)
+                    };
+                    start_file(&client, input, lang.as_deref(), Some(&mut report))?
+                }
+                Source::Youtube => {
+                    start_youtube(&client, input, lang.as_deref(), webhook.as_deref())?
+                }
+            };
             if !*wait {
                 if cli.json {
                     print_json(&json!({ "id": id }));
@@ -192,7 +231,7 @@ fn dispatch(cli: &Cli) -> Result<()> {
                 }
                 return Ok(());
             }
-            let project = wait_with_progress(&client, &id, quiet)?;
+            let project = wait_with_progress(&client, &id, *timeout, quiet)?;
             if cli.json {
                 print_json(&project);
             } else {
@@ -228,8 +267,8 @@ fn dispatch(cli: &Cli) -> Result<()> {
                     }
                 }
                 ProjectCmd::Get { id } => print_json(&client.get_project(id)?),
-                ProjectCmd::Watch { id } => {
-                    let project = wait_with_progress(&client, id, quiet)?;
+                ProjectCmd::Watch { id, timeout } => {
+                    let project = wait_with_progress(&client, id, *timeout, quiet)?;
                     if cli.json {
                         print_json(&project);
                     } else {
@@ -306,12 +345,25 @@ fn failed(project: &Value) -> ApiError {
     }
 }
 
-fn wait_with_progress(client: &Client, id: &str, quiet: bool) -> Result<Value> {
+fn human_size(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= 1024.0 * MB {
+        format!("{:.1} GB", bytes / (1024.0 * MB))
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes / MB)
+    } else {
+        format!("{:.0} kB", (bytes / 1024.0).max(1.0))
+    }
+}
+
+fn wait_with_progress(client: &Client, id: &str, timeout: Duration, quiet: bool) -> Result<Value> {
     let mut report = |state: &str| info(&format!("state: {state}"), quiet);
     wait_for_project(
         client,
         id,
         WaitOptions {
+            timeout,
             on_state: Some(&mut report),
             ..WaitOptions::default()
         },
@@ -542,5 +594,50 @@ mod tests {
             }
             _ => panic!("expected transcribe"),
         }
+    }
+
+    #[test]
+    fn the_wait_timeout_defaults_to_15_minutes_and_takes_minutes() {
+        let timeout_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Cmd::Transcribe { timeout, .. } => timeout,
+            Cmd::Project {
+                command: ProjectCmd::Watch { timeout, .. },
+            } => timeout,
+            _ => panic!("expected transcribe or project watch"),
+        };
+        let minutes = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(
+            timeout_of(&["tube", "transcribe", "x", "--wait"]),
+            minutes(15)
+        );
+        assert_eq!(timeout_of(&["tube", "project", "watch", "p1"]), minutes(15));
+        assert_eq!(
+            timeout_of(&["tube", "transcribe", "x", "-w", "--timeout", "45"]),
+            minutes(45)
+        );
+        assert_eq!(
+            timeout_of(&["tube", "project", "watch", "p1", "--timeout", "0.5"]),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn a_bad_timeout_is_refused() {
+        for bad in ["0", "-1", "soon", "NaN", "inf", "1441"] {
+            assert!(
+                Cli::try_parse_from(["tube", "project", "watch", "p1", "--timeout", bad]).is_err(),
+                "--timeout {bad} should be rejected"
+            );
+        }
+        // Without --wait there is nothing to time out.
+        assert!(Cli::try_parse_from(["tube", "transcribe", "x", "--timeout", "5"]).is_err());
+    }
+
+    #[test]
+    fn sizes_read_naturally() {
+        assert_eq!(human_size(10), "1 kB");
+        assert_eq!(human_size(300 * 1024), "300 kB");
+        assert_eq!(human_size(5 * 1024 * 1024 + 512 * 1024), "5.5 MB");
+        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GB");
     }
 }
