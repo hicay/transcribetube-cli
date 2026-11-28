@@ -38,7 +38,7 @@ struct Cli {
 enum Cmd {
     /// Sign in. Opens the dashboard to copy your API key, or pass --api-key.
     Login {
-        /// Store a session token (needed only for `whoami` credit and `account api-key`)
+        /// Store a session token (needed only for `account api-key`)
         #[arg(long, value_name = "JWT")]
         token: Option<String>,
     },
@@ -464,38 +464,47 @@ fn whoami(cli: &Cli) -> Result<()> {
             401,
         ));
     }
-    let mut report = serde_json::Map::new();
-    let mut lines = Vec::new();
-
-    if client.has_token() {
-        let me = client.me()?;
-        let plan = client.current_plan().ok();
-        lines.push(
-            me.get("email")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_string(),
-        );
-        if let Some(credit) = plan.as_ref().and_then(|p| p.get("availableCredit")) {
-            lines.push(format!("credit: {credit}"));
-        }
-        if let Value::Object(fields) = me {
-            report.extend(fields);
-        }
-        report.insert("plan".into(), plan.unwrap_or(Value::Null));
-    }
-    if client.has_api_key() {
-        // No API key route returns the account, so prove the key by using it.
-        let count = client.list_projects(1)?.len();
-        let shown = if count >= 100 {
-            "100+".to_string()
-        } else {
-            count.to_string()
+    // The API key route returns the whole account; a session token needs two
+    // requests for the same facts. Either way the report has the same shape.
+    let (mut report, plan) = if client.has_api_key() {
+        let mut account = match client.account()? {
+            Value::Object(fields) => fields,
+            _ => serde_json::Map::new(),
         };
-        let noun = if count == 1 { "project" } else { "projects" };
-        lines.push(format!("API key works ({shown} {noun})"));
-        report.insert("apiKey".into(), json!({ "valid": true, "projects": count }));
+        let mut plan = serde_json::Map::new();
+        for field in ["currentPlan", "availableCredit", "totalCredit"] {
+            if let Some(value) = account.remove(field) {
+                plan.insert(field.into(), value);
+            }
+        }
+        account.insert("apiKey".into(), json!({ "valid": true }));
+        (account, Some(Value::Object(plan)))
+    } else {
+        let me = match client.me()? {
+            Value::Object(fields) => fields,
+            _ => serde_json::Map::new(),
+        };
+        (me, client.current_plan().ok())
+    };
+
+    let mut lines = vec![report
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()];
+    if let Some(plan) = &plan {
+        if let Some(name) = plan.get("currentPlan").and_then(Value::as_str) {
+            lines.push(format!("plan: {name}"));
+        }
+        match (plan.get("availableCredit"), plan.get("totalCredit")) {
+            (Some(left), Some(total)) if !total.is_null() => {
+                lines.push(format!("credit: {left} of {total} minutes"))
+            }
+            (Some(left), _) => lines.push(format!("credit: {left} minutes")),
+            _ => {}
+        }
     }
+    report.insert("plan".into(), plan.unwrap_or(Value::Null));
 
     if cli.json {
         print_json(&Value::Object(report));

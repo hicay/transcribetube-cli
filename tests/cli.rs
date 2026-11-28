@@ -80,6 +80,10 @@ fn route(req: &Request) -> (u16, String) {
         ),
         ("GET", p) if p.starts_with("/api/detail/") => error(404, "[404] Project not found"),
         ("POST", "/api/transcribeVideo") => ok(json!({"success": true, "projectId": "p1"})),
+        ("GET", "/api/me") if req.header("api-key") == Some("test-key") => ok(json!({
+            "id": "u1", "email": "owner@example.com",
+            "currentPlan": "Pro", "availableCredit": 300, "totalCredit": 600,
+        })),
         ("GET", "/account/me") if req.header("authorization") == Some("Bearer jwt") => {
             ok(json!({"id": "u1", "email": "owner@example.com"}))
         }
@@ -277,37 +281,53 @@ fn the_api_key_flag_beats_the_environment() {
 }
 
 #[test]
-fn whoami_with_an_api_key_proves_the_key_works() {
+fn whoami_with_an_api_key_shows_account_plan_and_credit() {
     let api = MockApi::start(route);
     let r = run(&api, &KEY, &["whoami"]);
     assert_eq!(
         (r.code, r.stdout.as_str()),
-        (0, "API key works (3 projects)\n")
+        (
+            0,
+            "owner@example.com\nplan: Pro\ncredit: 300 of 600 minutes\n"
+        )
     );
     // The account routes reject API keys, so they must not be called with one.
     assert!(api
         .requests()
         .iter()
         .all(|q| !q.path.starts_with("/account")));
+
+    let r = run(&api, &KEY, &["whoami", "--json"]);
+    let parsed: Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(parsed["email"], "owner@example.com");
+    assert_eq!(parsed["plan"]["availableCredit"], 300);
+    assert_eq!(parsed["apiKey"], json!({"valid": true}));
 }
 
 #[test]
-fn whoami_with_a_token_shows_account_and_credit() {
+fn whoami_with_a_wrong_api_key_exits_2() {
+    let api = MockApi::start(route);
+    let r = run(&api, &[("TUBE_API_KEY", "wrong")], &["whoami"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    assert_eq!(r.stdout, "");
+}
+
+#[test]
+fn whoami_with_only_a_token_shows_the_same_report() {
     let api = MockApi::start(route);
     let r = run(&api, &[("TUBE_TOKEN", "jwt")], &["whoami"]);
     assert_eq!(
         (r.code, r.stdout.as_str()),
-        (0, "owner@example.com\ncredit: 300\n")
+        (
+            0,
+            "owner@example.com\nplan: Pro\ncredit: 300 of 600 minutes\n"
+        )
     );
-    let r = run(
-        &api,
-        &[("TUBE_TOKEN", "jwt"), ("TUBE_API_KEY", "test-key")],
-        &["whoami", "--json"],
-    );
+    assert!(api.requests().iter().all(|q| q.path != "/api/me"));
+    let r = run(&api, &[("TUBE_TOKEN", "jwt")], &["whoami", "--json"]);
     let parsed: Value = serde_json::from_str(&r.stdout).unwrap();
-    assert_eq!(parsed["email"], "owner@example.com");
     assert_eq!(parsed["plan"]["availableCredit"], 300);
-    assert_eq!(parsed["apiKey"], json!({"valid": true, "projects": 3}));
+    assert!(parsed.get("apiKey").is_none());
 }
 
 #[test]

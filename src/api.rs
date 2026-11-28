@@ -164,6 +164,11 @@ impl Client {
         })
     }
 
+    /// `{ id, email, currentPlan, availableCredit, totalCredit }`. Needs an API key.
+    pub fn account(&self) -> Result<Value> {
+        self.request("GET", "/api/me", None)
+    }
+
     /// `{ id, email }`. Needs a session token.
     pub fn me(&self) -> Result<Value> {
         self.request("GET", "/account/me", None)

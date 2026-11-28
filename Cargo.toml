@@ -1,6 +1,6 @@
 [package]
 name = "transcribetube-cli"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.80"
 description = "Transcribe YouTube videos to text, SRT, VTT, or markdown from your terminal or from AI assistants via MCP."
